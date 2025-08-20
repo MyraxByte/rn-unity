@@ -2,106 +2,99 @@
 #ifdef DEBUG
 #include <mach-o/ldsyms.h>
 #endif
-#ifdef RCT_NEW_ARCH_ENABLED
-using namespace facebook::react;
-#endif
 
 NSString *bundlePathStr = @"/Frameworks/UnityFramework.framework";
 int gArgc = 1;
 
-UnityFramework* UnityFrameworkLoad() {
-    NSString* bundlePath = nil;
-    bundlePath = [[NSBundle mainBundle] bundlePath];
-    bundlePath = [bundlePath stringByAppendingString: bundlePathStr];
+static NSDictionary *appLaunchOpts;
+static RNUnityView *sharedInstance = nil;
 
-    NSBundle* bundle = [NSBundle bundleWithPath: bundlePath];
-    if ([bundle isLoaded] == false) [bundle load];
+static UnityFramework* UnityFrameworkLoad(void) {
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    bundlePath = [bundlePath stringByAppendingString:bundlePathStr];
 
-    UnityFramework* ufw = [bundle.principalClass getInstance];
-    if (![ufw appController])
-    {
-#ifdef DEBUG
-      [ufw setExecuteHeader: &_mh_dylib_header];
-#else
-      [ufw setExecuteHeader: &_mh_execute_header];
-#endif
+    NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+    if (![bundle isLoaded]) {
+        [bundle load];
     }
 
-    [ufw setDataBundleId: [bundle.bundleIdentifier cStringUsingEncoding:NSUTF8StringEncoding]];
-
+    UnityFramework *ufw = [bundle.principalClass getInstance];
+    if (![ufw appController]) {
+#ifdef DEBUG
+        [ufw setExecuteHeader:&_mh_dylib_header];
+#else
+        [ufw setExecuteHeader:&_mh_execute_header];
+#endif
+    }
+    [ufw setDataBundleId:[bundle.bundleIdentifier cStringUsingEncoding:NSUTF8StringEncoding]];
     return ufw;
 }
 
 @implementation RNUnityView
 
-NSDictionary* appLaunchOpts;
-
-static RNUnityView *sharedInstance;
-
-- (bool)unityIsInitialized {
+- (BOOL)unityIsInitialized {
     return [self ufw] && [[self ufw] appController];
 }
 
 - (void)initUnityModule {
     @try {
-        if([self unityIsInitialized]) {
+        if ([self unityIsInitialized]) {
             return;
         }
 
-        [self setUfw: UnityFrameworkLoad()];
-        [[self ufw] registerFrameworkListener: self];
+        [self setUfw:UnityFrameworkLoad()];
+        [[self ufw] registerFrameworkListener:self];
 
-        unsigned count = (int) [[[NSProcessInfo processInfo] arguments] count];
-        char **array = (char **)malloc((count + 1) * sizeof(char*));
-
-        for (unsigned i = 0; i < count; i++)
-        {
-             array[i] = strdup([[[[NSProcessInfo processInfo] arguments] objectAtIndex:i] UTF8String]);
+        unsigned count = (unsigned)[[[NSProcessInfo processInfo] arguments] count];
+        char **argv = (char **)malloc((count + 1) * sizeof(char *));
+        for (unsigned i = 0; i < count; i++) {
+            argv[i] = strdup([[[[NSProcessInfo processInfo] arguments] objectAtIndex:i] UTF8String]);
         }
-        array[count] = NULL;
+        argv[count] = NULL;
 
-        [[self ufw] runEmbeddedWithArgc: gArgc argv: array appLaunchOpts: appLaunchOpts];
-        [[self ufw] appController].quitHandler = ^(){ NSLog(@"AppController.quitHandler called"); };
+        [[self ufw] runEmbeddedWithArgc:gArgc argv:argv appLaunchOpts:appLaunchOpts];
+        [[self ufw] appController].quitHandler = ^(){};
+
         [self.ufw.appController.rootView removeFromSuperview];
 
         if (@available(iOS 13.0, *)) {
-            [[[[self ufw] appController] window] setWindowScene: nil];
+            [[[[self ufw] appController] window] setWindowScene:nil];
         } else {
-            [[[[self ufw] appController] window] setScreen: nil];
+            [[[[self ufw] appController] window] setScreen:nil];
         }
 
-        [[[[self ufw] appController] window] addSubview: self.ufw.appController.rootView];
+        [[[[self ufw] appController] window] addSubview:self.ufw.appController.rootView];
         [[[[self ufw] appController] window] makeKeyAndVisible];
         [[[[[[self ufw] appController] window] rootViewController] view] setNeedsLayout];
 
         [NSClassFromString(@"FrameworkLibAPI") registerAPIforNativeCalls:self];
     }
-    @catch (NSException *e) {
-        NSLog(@"%@",e);
+    @catch (__unused NSException *e) {
+        // Silent catch by request
     }
 }
 
 - (void)layoutSubviews {
-   [super layoutSubviews];
+    [super layoutSubviews];
 
-   if([self unityIsInitialized]) {
-      self.ufw.appController.rootView.frame = self.bounds;
-      [self addSubview:self.ufw.appController.rootView];
-   }
+    if ([self unityIsInitialized]) {
+        self.ufw.appController.rootView.frame = self.bounds;
+        [self addSubview:self.ufw.appController.rootView];
+    }
 }
 
 - (void)pauseUnity:(BOOL * _Nonnull)pause {
-    if([self unityIsInitialized]) {
+    if ([self unityIsInitialized]) {
         [[self ufw] pause:pause];
     }
 }
 
 - (void)unloadUnity {
-    UIWindow * main = [[[UIApplication sharedApplication] delegate] window];
-    if(main != nil) {
+    UIWindow *main = [[[UIApplication sharedApplication] delegate] window];
+    if (main != nil) {
         [main makeKeyAndVisible];
 
-        if([self unityIsInitialized]) {
+        if ([self unityIsInitialized]) {
             [[self ufw] unloadApplication];
         }
     }
@@ -109,18 +102,15 @@ static RNUnityView *sharedInstance;
 
 - (void)sendMessageToMobileApp:(NSString *)message {
     if (self.onUnityMessage) {
-        NSDictionary* data = @{
-            @"message": message
-        };
-
+        NSDictionary *data = @{ @"message": message ?: @"" };
         self.onUnityMessage(data);
     }
 }
 
-- (void)unityDidUnload:(NSNotification*)notification {
-    if([self unityIsInitialized]) {
+- (void)unityDidUnload:(NSNotification *)notification {
+    if ([self unityIsInitialized]) {
         [[self ufw] unregisterFrameworkListener:self];
-        [self setUfw: nil];
+        [self setUfw:nil];
 
         if (self.onPlayerUnload) {
             self.onPlayerUnload(nil);
@@ -128,10 +118,10 @@ static RNUnityView *sharedInstance;
     }
 }
 
-- (void)unityDidQuit:(NSNotification*)notification {
-    if([self unityIsInitialized]) {
+- (void)unityDidQuit:(NSNotification *)notification {
+    if ([self unityIsInitialized]) {
         [[self ufw] unregisterFrameworkListener:self];
-        [self setUfw: nil];
+        [self setUfw:nil];
 
         if (self.onPlayerQuit) {
             self.onPlayerQuit(nil);
@@ -147,83 +137,25 @@ static RNUnityView *sharedInstance;
     return @[@"onUnityMessage", @"onPlayerUnload", @"onPlayerQuit"];
 }
 
-- (void)postMessage:(NSString *)gameObject methodName:(NSString*)methodName message:(NSString*) message {
+- (void)postMessage:(NSString *)gameObject methodName:(NSString *)methodName message:(NSString *)message {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [[self ufw] sendMessageToGOWithName:[gameObject UTF8String] functionName:[methodName UTF8String] message:[message UTF8String]];
+        [[self ufw] sendMessageToGOWithName:[gameObject UTF8String]
+                                functionName:[methodName UTF8String]
+                                     message:[message UTF8String]];
     });
 }
 
-#ifdef RCT_NEW_ARCH_ENABLED
-- (void)prepareForRecycle {
-    [super prepareForRecycle];
-
-    if ([self unityIsInitialized]) {
-      [[self ufw] unloadApplication];
-
-      NSArray *viewsToRemove = self.subviews;
-      for (UIView *v in viewsToRemove) {
-          [v removeFromSuperview];
-      }
-
-      [self setUfw:nil];
-    }
-}
-
-+ (ComponentDescriptorProvider)componentDescriptorProvider {
-    return concreteComponentDescriptorProvider<RNUnityViewComponentDescriptor>();
-}
-
 - (instancetype)initWithFrame:(CGRect)frame {
-  if (self = [super initWithFrame:frame]) {
-    static const auto defaultProps = std::make_shared<const RNUnityViewProps>();
-    _props = defaultProps;
-
-    self.onUnityMessage = [self](NSDictionary* data) {
-      if (_eventEmitter != nil) {
-        auto gridViewEventEmitter = std::static_pointer_cast<RNUnityViewEventEmitter const>(_eventEmitter);
-        facebook::react::RNUnityViewEventEmitter::OnUnityMessage event = {
-          .message=[[data valueForKey:@"message"] UTF8String]
-        };
-        gridViewEventEmitter->onUnityMessage(event);
-      }
-    };
-  }
-
-  return self;
-}
-
-- (void)updateEventEmitter:(EventEmitter::Shared const &)eventEmitter {
-    [super updateEventEmitter:eventEmitter];
-}
-
-- (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps {
-    if (![self unityIsInitialized]) {
-      [self initUnityModule];
-    }
-
-    [super updateProps:props oldProps:oldProps];
-}
-
-- (void)handleCommand:(nonnull const NSString *)commandName args:(nonnull const NSArray *)args {
-    RCTRNUnityViewHandleCommand(self, commandName, args);
-}
-
-Class<RCTComponentViewProtocol> RNUnityViewCls(void) {
-    return RNUnityView.class;
-}
-
-#else
-
--(id)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
 
     if (self) {
+        if (!sharedInstance) {
+            sharedInstance = self;
+        }
         [self initUnityModule];
     }
 
     return self;
 }
-
-#endif
 
 @end
